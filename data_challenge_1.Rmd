@@ -1,0 +1,105 @@
+---
+title: "Untitled"
+author: "Sruthi"
+date: "May 9, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "Untitled"
+author: "Sruthi "
+date: "May 4, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+options(scipen = 999)
+```
+
+Loading datasets spends and counts
+```{r}
+spend <- read.csv("spend.csv") 
+spend$date <- as.POSIXct(spend$date , origin = '1970-01-01')
+spend$date <- as.Date(spend$date, format="%Y-%M-%D")
+summary(spend)
+
+counts <- read.csv(file="counts.csv", header=TRUE, sep=",")
+summary(counts)
+
+#merging both datasets to get entire data at one place
+df<- merge(spend,counts, by=c("account","date"), na.rm= TRUE)
+
+#creating date and month variables from the date
+df <- df %>% mutate(year= as.numeric(substr(date,1,4)), month= as.numeric(substr(date,6,7)), count=as.numeric(count))
+
+#creating year over year average amount spend and average number of transactions
+df1 <- df %>% group_by(account,year) %>% mutate(amt_yoy=mean(amount),count_yoy=mean(count)) %>% 
+                                        select (account,year,amt_yoy,count_yoy) %>%
+                                        unique()
+```
+
+Spreading the data to get data at unique account level.
+```{r}
+df2 <- df1 %>% spread(key=year, value=count_yoy, fill=0)
+df3 <- df1 %>% spread(key=year, value=amt_yoy, fill=0)
+
+df4 <- merge(df2,df3, by="account") %>% group_by(account) %>% summarise(sum(`2017.x`),sum(`2018.x`),sum(`2019.x`),sum(`2017.y`),sum(`2018.y`),sum(`2019.y`)) %>% unique()
+
+#renaming columns for the ease of calling
+colnames(df4) <- c("account","count_2017","count_2018","count_2019", "amt_2017","amt_2018","amt_2019")
+
+#rounding off all variables 
+df5 <- as.data.frame(apply(df4[,2:7],2, function(x) round(x,0)))
+   
+#creating ratio of yoy amount spend per transactions
+df5$`amt/trn17` <- df5$amt_2017/df5$count_2017
+df5$`amt/trn18` <- df5$amt_2018/df5$count_2018
+df5$`amt/trn19` <- df5$amt_2019/df5$count_2019
+
+#replacing nan with 0
+is.na(df5) <- do.call(cbind,lapply(df5, is.infinite))
+df5[is.na(df5)] <- 0
+```
+Defining churn variables
+```{r}
+df5$churn <- ifelse((df5$count_2017 > df5$count_2018 & df5$count_2018 >df5$count_2019) | 
+                      (df5$amt_2017 > df5$amt_2018 & df5$amt_2018 >df5$amt_2019), 1, 0)
+
+df5$churn <- as.factor(df5$churn)
+```
+
+splitting original data set for test and train datasets
+```{r}
+df_train <- df5[1:7000,1:10]
+df_test  <- df5[7001:9999,1:10]
+```
+
+Running a logistic model - Logistic regression
+```{r}
+mylogit <- glm(churn ~ count_2017 + count_2018 + count_2019+amt_2017+amt_2018+amt_2019, data = df_train, family = "binomial")
+
+summary(mylogit)
+
+confint(mylogit)
+
+exp(coef(mylogit))
+
+exp(cbind(OR = coef(mylogit), confint(mylogit)))
+```
+Testing model against test dataset
+```{r}
+df_test$rankP <- predict(mylogit, newdata = df_test, type = "response")
+df_test
+```
+
